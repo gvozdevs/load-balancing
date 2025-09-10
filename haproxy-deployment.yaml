@@ -1,0 +1,65 @@
+# haproxy-deployment.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-config
+data:
+  haproxy.cfg: |
+    global
+      daemon
+      maxconn 4096
+    
+    defaults
+      mode http
+      timeout connect 5000ms
+      timeout client 50000ms
+      timeout server 50000ms
+      option httpclose
+    
+    frontend http_front
+      bind *:8080
+      default_backend echo_servers
+    
+    backend echo_servers
+      balance roundrobin
+      option httpchk GET /
+      server-template echo 100 echo-service:80 check
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: haproxy
+  template:
+    metadata:
+      labels:
+        app: haproxy
+    spec:
+      containers:
+        - name: haproxy
+          image: haproxy:2.8
+          volumeMounts:
+            - name: haproxy-config
+              mountPath: /usr/local/etc/haproxy
+          ports:
+            - containerPort: 8080
+      volumes:
+        - name: haproxy-config
+          configMap:
+            name: haproxy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy-service
+spec:
+  selector:
+    app: haproxy
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
