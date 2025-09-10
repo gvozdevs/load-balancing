@@ -1,7 +1,3 @@
-.PHONY: all deploy clean test-iptables test-envoy test-nginx stats
-
-ECHO_POD_LABEL=app=echo
-CURL_IMAGE=radial/busyboxplus:curl
 REQUEST_COUNT=20000
 PARALLEL_JOBS=5
 TIMEOUT_SECONDS=240
