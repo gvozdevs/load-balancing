@@ -41,7 +41,7 @@ spec:
     spec:
       containers:
         - name: haproxy
-          image: haproxy:2.8
+          image: haproxy:3.2.4
           volumeMounts:
             - name: haproxy-config
               mountPath: /usr/local/etc/haproxy

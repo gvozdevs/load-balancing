@@ -1,8 +1,8 @@
-# echo-server.yaml
+# echo-service.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: echo-server
+  name: echo-service
 spec:
   replicas: 90
   selector:
@@ -26,6 +26,7 @@ spec:
             - |
               import os
               import time
+              import random
 
               from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -35,14 +36,11 @@ spec:
                   request_counter = 0
 
                   def do_GET(self):
-                      #Handler.request_counter += 1
-                      #if Handler.request_counter % 10 == 0:
-                      #    time.sleep(1)  # задержка в 1 секунду
+                      time.sleep(random.uniform(0.05, 0.1))
               
                       self.send_response(200)
                       self.send_header('Content-type', 'text/plain')
                       self.send_header('X-Pod-Name', POD_NAME)
-                      self.send_header('Connection', 'close')  # Принудительно закрываем соединение
                       self.end_headers()
                       self.wfile.write(f"Pod {POD_NAME}\n".encode())
                       
@@ -78,6 +76,5 @@ spec:
     - protocol: TCP
       port: 80
       targetPort: 5678
-  # Настройки для лучшего распределения
   sessionAffinity: None
   type: ClusterIP

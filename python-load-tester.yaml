@@ -1,0 +1,159 @@
+# python-load-tester.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: python-load-tester-script
+  labels:
+    app: python-load-tester
+data:
+  load_test.py: |
+    #!/usr/bin/env python3
+    import asyncio
+    import aiohttp
+    import sys
+    import os
+    import time
+
+    async def make_request(session, url, request_id):
+        """Выполняет один HTTP запрос"""
+        try:
+            async with session.get(url) as response:
+                # Получаем информацию о соединении
+                connection_key = getattr(response.connection, '_key', 'unknown')
+                transport = getattr(response.connection, 'transport', None)
+                if transport and hasattr(transport, 'get_extra_info'):
+                    sock = transport.get_extra_info('socket')
+                    if sock:
+                        local_addr = sock.getsockname()
+                        remote_addr = sock.getpeername()
+                        connection_id = f"{local_addr[1]}->{remote_addr[1]}"
+                    else:
+                        connection_id = str(id(response.connection))
+                else:
+                    connection_id = str(id(response.connection))
+                
+                await response.text()
+    
+                pod_name = response.headers.get('X-Pod-Name') or response.headers.get('x-pod-name', 'unknown')
+    
+                if response.status == 200:
+                    print(f"X-Pod-Name: {pod_name}")
+                else:
+                    print(f"No X-Pod-Name header found")
+    
+        except Exception as e:
+            print(f"Request {request_id}: Error - {e}")
+
+    async def run_load_test():
+        url = os.getenv('TEST_URL', 'http://echo-service/')
+        requests = int(os.getenv('TEST_REQUESTS', '1000'))
+        concurrency = int(os.getenv('TEST_CONCURRENCY', '10'))
+        pool = int(os.getenv('TEST_POOL', '10'))
+        timeout = int(os.getenv('TEST_TIMEOUT', '10'))
+        
+        connector = aiohttp.TCPConnector(
+            limit=pool,
+            limit_per_host=pool,
+            keepalive_timeout=600,  # Увеличиваем время жизни соединений до 10 минут
+            enable_cleanup_closed=False,  # Не убираем закрытые соединения сразу
+            force_close=False,  # Не закрываем соединения принудительно
+            ttl_dns_cache=300
+        )
+    
+        headers = {
+            'Connection': 'keep-alive',
+            'Keep-Alive': 'timeout=600, max=1000'
+        }
+  
+        timeout_config = aiohttp.ClientTimeout(total=timeout, connect=5)
+    
+        async with aiohttp.ClientSession(
+            connector=connector, 
+            headers=headers
+        ) as session:
+    
+            # Создаем ограниченное количество одновременных соединений
+            # Чтобы заставить переиспользовать существующие
+            semaphore = asyncio.Semaphore(concurrency)
+    
+            async def limited_request(request_id):
+                async with semaphore:
+                    # Добавляем небольшую задержку между запросами
+                    # чтобы соединения успевали установиться
+                    if request_id > 1:
+                        await asyncio.sleep(0.05)  # 50ms задержка
+                    return await make_request(session, url, request_id)
+            
+            batch_size = pool * 2  # Размер батча = 2 * размер пула
+            connection_usage = {}
+            
+            for i in range(0, requests, batch_size):
+                end_idx = min(i + batch_size, requests)
+    
+                batch_tasks = [limited_request(j) for j in range(i+1, end_idx+1)]
+                await asyncio.gather(*batch_tasks, return_exceptions=True)
+    
+                # Пауза между батчами для стабилизации соединений
+                await asyncio.sleep(0.1)
+
+    if __name__ == "__main__":
+        asyncio.run(run_load_test())
+
+  requirements.txt: |
+    aiohttp==3.9.1
+
+---
+# Deployment для Python Load Tester сервиса  
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-load-tester
+  labels:
+    app: python-load-tester
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: python-load-tester
+  template:
+    metadata:
+      labels:
+        app: python-load-tester
+    spec:
+      containers:
+        - name: python-load-tester
+          image: python:3.11-slim
+          env:
+            - name: TEST_URL
+              value: "http://echo-service/"
+            - name: TEST_REQUESTS
+              value: "500"
+            - name: TEST_CONCURRENCY
+              value: "5"
+            - name: TEST_POOL
+              value: "10"
+            - name: TEST_TIMEOUT
+              value: "30"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              echo "Installing dependencies..."
+              pip install --no-cache-dir -r /app/requirements.txt
+              echo "Python Load Tester ready"
+              while true; do sleep 3600; done
+          volumeMounts:
+            - name: script-volume
+              mountPath: /app
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: script-volume
+          configMap:
+            name: python-load-tester-script
+            defaultMode: 0755
